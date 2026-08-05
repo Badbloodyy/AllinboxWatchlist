@@ -6,6 +6,7 @@ use Illuminate\View\View;
 use Illuminate\Http\Request;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use App\Models\WatchlistUser;
 use App\Models\WatchlistMovie;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -15,74 +16,125 @@ class MoviesController extends Controller
 {
     private $tmdb_trends;
 
-    // TODO : Ajouter notification si erreur chargement pour toute requêtes et passer l'info front
     public function show_movies_trends(Request $request): View
     {
         // Je triche un peu en le mettant ici, mais en le mettant dans le service provider c'est problématique
-        WatchlistUser::firstOrCreate(['name' => 'myUser']);
+        $user = WatchlistUser::firstOrCreate(['name' => 'myUser']);
 
-        $messageUser = 'Bienvenue!';
+         // Je vais tester le comportement de watchlist si le serveur tmdb est down
+        /* Essai avec fake mais pas concluant
+        Http::fake([
+            'api.themoviedb.org/*' => Http::sequence()
+                ->push('Hello World', 200)
+                ->push(['foo' => 'bar'], 200)
+                ->pushStatus(503),
+        ]);
+        */
+
         /*
-        if ($response->failed()) {
-            abort(500, "Impossible de récupérer les données de TMDB.");
-        }*/
+        try {
+            throw new \Exception("Simulation : API DOWN");
+        } catch (\Exception $e) {
+            $results = WatchlistMovie::paginate(15);
+            session()->now('error', 'Mode sans API externe');
+        }
+
+        return view('movies_watchlist', [
+            'results' => $results,
+            'local_movies_ids' => $user->id_external_movies,
+            'local_movies_already_viewed_ids' => $user->id_external_movies_already_viewed,
+        ]);
+        */
 
         $current_page = $request->input('page', 1);
+
         $tmdb_trends = Http::api_tmdb()->get('/trending/movie/week', [
             'language' => 'fr-FR',
             'page'     => $current_page
         ]);
 
+        if($tmdb_trends->failed()) {
+            return redirect()->route('movies_watchlist')->with('error', "Une erreur est survenue, passage dans votre liste local");
+        }
+
         $pagination_data = $this->generate_pagination($request, $tmdb_trends, $current_page);
 
         return view('movies', [
             'results' => $pagination_data,
-            'search' => false,
-            'trends' => true,
-            'messageInitUser' => $messageUser
+            'local_movies_ids' => $user->id_external_movies,
+            'local_movies_already_viewed_ids' => $user->id_external_movies_already_viewed,
+            'trends' => true
         ]);
     }
 
-    // TODO :
-    // Call film par id et aussi les recommendation (limité au 3 premieres côté front je pense) à retourner
-    // Check si l'id est bonne / existe
-    // Check si recommandation, sinon renvoi null je pense
-    public function show_movie(string $id): View
+    public function show_movie(string $id)
     {
-        // 404 si l'id tmdb n'est pas bonne aussi
-        // TODO : Mettre en cache cette donnée
-        $recommendation_data = Http::api_tmdb()->get('movie/' . $id . '/recommendations', [
-           'language' => 'fr-FR'
-        ]);
-
-        // Call BDD local, sinon tmdb
-        $movie = WatchlistMovie::where('tmdb_id', $id)->first();
-
-        if(!$movie) {
-            $movie = json_decode(Http::api_tmdb()->get('/movie/' . $id, [
-                'language' => 'fr-FR'
-            ]));
-
-            return view('movie', [
-                'movie' => $movie,
-                'recommendation' => $recommendation_data,
-            ]);
+         if(!is_numeric($id)) {
+            return redirect()->back()->with('error', "L'identifiant du film doit être un nombre");
         }
 
-        return view('movie_watchlist', [
-            'movie' => $movie,
-            'recommendation' => $recommendation_data,
-            //'watchlisted' => ,
-            //'alreadyViewed' => ,
+        $key_cache = "tmdb_popular_page_{$id}";
 
-        ]);
+        // Cache recommendation
+        $data_cache = Cache::remember($key_cache, now()->addMinutes(15), function () use ($id) {
+            $recommendation_data = Http::api_tmdb()->get('movie/' . $id . '/recommendations', [
+           'language' => 'fr-FR'
+            ]);
+
+            if($recommendation_data->failed()) {
+                return redirect()->back()->with('error', "L'id TMDB ne mène pas à un film existant ou l'API à un problème. Impossible d'afficher les recommandations");
+            }
+
+            return $recommendation_data->json();
+        });
+
+        // On aura une liste de recommandation parmi les 3 comme ça !
+        $random_recom = collect($data_cache['results'])->random(3);
+
+        $user = WatchlistUser::where('name', 'myUser')->first();
+
+        try {
+            // Call BDD local, sinon tmdb
+            $movie = WatchlistMovie::where('tmdb_id', $id)->first();
+
+            if($movie) {
+                return view('movie_watchlist', [
+                    'movie' => $movie,
+                    'recommendation' => $random_recom,
+                    'local_movies_ids' => $user->id_external_movies,
+                    'local_movies_already_viewed_ids' => $user->id_external_movies_already_viewed
+                ]);
+            } else {
+                $movie = Http::api_tmdb()->get('/movie/' . $id, [
+                    'language' => 'fr-FR'
+                ]);
+
+                if($movie->failed()) {
+                    return redirect()->back()->with('error', "L'id TMDB ne mène pas à un film existant. Réessayez avec un autre lien");
+                }
+
+                $movie_data = $movie->json();
+
+                return view('movie', [
+                    'movie' => $movie_data,
+                    'recommendation' => $random_recom,
+                    'local_movies_ids' => $user->id_external_movies,
+                    'local_movies_already_viewed_ids' => $user->id_external_movies_already_viewed
+                ]);
+            }
+        } catch(Exception $e) {
+            Log::error("Erreur lors de l'ajout : " . $e->getMessage());
+
+            return redirect()->back()->with('error', "Il y a eu une erreur technique");
+        }
     }
 
     public function search_movies(Request $request): View
     {
-        $messageUser = 'Recherche';
         $search = request()->query('search');
         $current_page = $request->input('page', 1);
+
+        $user = WatchlistUser::where('name', 'myUser')->first();
 
         $tmdb_search = Http::api_tmdb()->get('search/movie', [
             'query' => $search,
@@ -93,14 +145,14 @@ class MoviesController extends Controller
 
         return view('movies', [
             'results' => $pagination_data,
-            'search' => true,
-            'trends' => false,
-            'messageInitUser' => $messageUser
+            'local_movies_ids' => $user->id_external_movies,
+            'local_movies_already_viewed_ids' => $user->id_external_movies_already_viewed,
+            'trends' => false
         ]);
     }
 
     public function generate_pagination(Request $request, Response $data, int $current_page) : LengthAwarePaginator {
-        // Création d'une pagination compatible avec tailwindcss, en créant un objet pagination
+        // Création d'une pagination compatible avec tailwindcss, en créant un objet paginator
         $data_json = $data->json();
         $movies = $data_json['results'] ?? [];
         $resultByPage = 20;
@@ -121,30 +173,3 @@ class MoviesController extends Controller
         );
     }
 }
-
-/*
-
-     $response = Http::api_tmdb()->get('/search/movie', [
-            'query' => 'star wars',
-            'language' => 'fr-FR'
-        ]);
-
-    JSON :
-    {
-        "id" : xx,
-        "poster_path": xxxx , // url img poster
-        "title": "Star Wars",
-        "overview": "Princess Leia Venturesome Luke Skywalker...", // description
-        "release_date": "1977-05-25",
-    }
-	https://media.themoviedb.org/t/p/w220_and_h330_face/yikio8CfJxIA7faZxgvB9FGXy6u.jpg
-    https://image.tmdb.org/t/p/w500/xxx (autre pour d'autres version) ou https://image.tmdb.org/t/p/original/xxx pour l'original
-    movie/{movie_id}/recommendations -> recommandation vis à vis du film en question
-    search/movie?query=starwars
-    $response = Http::api_tmdb()->get('/movie/11/', [
-            'language' => 'fr-FR'
-        ]);
-    https://api.themoviedb.org/3/trending/movie/week -> page tendance pour l'accueil?
-
-
-*/

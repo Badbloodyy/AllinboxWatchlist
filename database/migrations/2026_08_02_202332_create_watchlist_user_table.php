@@ -29,9 +29,9 @@ return new class extends Migration
             $table->string('original_title');
             $table->string('overview');
             $table->string('poster_path');
-            //$table->binary('poster');
+            //$table->binary('poster')->nullable();
             $table->date('release_date');
-             $table->timestamps();
+            $table->timestamps();
         });
 
     }

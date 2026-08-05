@@ -25,7 +25,6 @@ class WatchlistMovieObserver implements ShouldHandleEventsAfterCommit
             $movies
         );
 
-        // first bizarre mais obligatoire pour faire le -save()
         $watchlistUser = WatchlistUser::where('id', $user_id)->first();
         $watchlistUser->id_external_movies = $tmdb_ids;
         $watchlistUser->save();
@@ -39,11 +38,6 @@ class WatchlistMovieObserver implements ShouldHandleEventsAfterCommit
         $user_id = json_decode($watchlistMovie->watchlist_user_id);
         $movies = json_decode(WatchlistMovie::where('watchlist_user_id', $user_id)->get());
 
-        /*
-        Flight::where('active', 1)
-        ->where('destination', 'San Diego')
-        ->update(['delayed' => 1]);
-        */
         $filtered_movies = array_filter($movies, function($movie) {
                 return $movie->already_viewed == true;
         });

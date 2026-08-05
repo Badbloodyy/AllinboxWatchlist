@@ -48,7 +48,5 @@ class WatchlistUser extends Model
     public function watchlistMovies(): HasMany
     {
         return $this->hasMany(WatchlistMovie::class);
-        // Ptete plutôt utilisé ça pour "hydrater" la liste, voir dans la doc eloquent
-        //   return $this->hasMany(Comment::class)->chaperone();
     }
 }

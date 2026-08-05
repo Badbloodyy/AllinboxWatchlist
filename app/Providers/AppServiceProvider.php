@@ -31,11 +31,6 @@ class AppServiceProvider extends ServiceProvider
         Http::macro('api_tmdb', function () {
             return Http::withToken(config('services.tmdb.api_key'))->baseUrl(config('services.tmdb.api_url'));
         });
-
-        // url permettant de reconstituer l'image obtenue via l'api
-        Http::macro('media_tmdb', function () {
-            return Http::withToken(config('services.tmdb.api_key'))->baseUrl(config('services.tmdb.media_url'));
-        });
     }
 
     /**

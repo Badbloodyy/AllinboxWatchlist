@@ -29,11 +29,8 @@
         </div>
     </div>
 </div>
-
-@include('success_message')
-@include('error_message')
-<div class="p-5">
-    @if($results)
+@if($results)
+    <div class="p-5">
         <section class="main-content" name="movies-content">
             <div class="column-wrapper inverse">
                 <div class="content-wrapper">
@@ -118,4 +115,4 @@
 
 
 
-    @include('footer')
+@include('footer')
